@@ -14,7 +14,11 @@ struct Vertex {
     position: [f32; 3],
     color: [f32; 3],
 }
-
+struct Mesh {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
+}
 // 정육면체 정점 데이터 (8개만 정의)
 const VERTICES: &[Vertex] = &[
     Vertex {
@@ -74,19 +78,17 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     window: Arc<Window>,
     rotation: f32,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
     depth_texture_view: wgpu::TextureView,
     camera_radius: f32,
     is_dragging: bool,
     yaw: f32,
     pitch: f32,
     last_mouse_pos: Option<winit::dpi::PhysicalPosition<f64>>,
+    obj_mesh: Mesh,
 }
 
 impl State {
@@ -122,20 +124,7 @@ impl State {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let num_indices = INDICES.len() as u32;
-
+        let obj_mesh = Mesh::new(&device, VERTICES, INDICES);
         let size = window.inner_size();
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
@@ -244,18 +233,16 @@ impl State {
             config,
             size,
             render_pipeline,
-            vertex_buffer,
             camera_buffer,
             camera_bind_group,
             rotation: 0.0,
-            index_buffer,
-            num_indices,
             depth_texture_view,
             camera_radius: 4.0,
             is_dragging: false,
             yaw: f32::to_radians(-90.0),
             pitch: f32::to_radians(20.0),
             last_mouse_pos: None,
+            obj_mesh,
         }
     }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -319,9 +306,7 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); //
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1); //
+            self.obj_mesh.draw(&mut render_pass);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -453,7 +438,31 @@ impl ApplicationHandler for App {
     // 이 부분은 비워두거나 제거해도 RedrawRequested 내의 호출이 우선됩니다.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {}
 }
+impl Mesh {
+    fn new(device: &wgpu::Device, vertices: &[Vertex], indices: &[u16]) -> Self {
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mesh Vertex Buffer"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mesh Index Buffer"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        Self {
+            vertex_buffer,
+            index_buffer,
+            num_indices: indices.len() as u32,
+        }
+    }
 
+    fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+    }
+}
 fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = App { state: None };
