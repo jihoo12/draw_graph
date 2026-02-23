@@ -422,6 +422,7 @@ impl Mesh {
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
     }
 }
+
 fn generate_3d_graph() -> (Vec<Vertex>, Vec<u16>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -472,6 +473,8 @@ fn generate_3d_graph() -> (Vec<Vertex>, Vec<u16>) {
 
     (vertices, indices)
 }
+
+
 fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = App { state: None };
