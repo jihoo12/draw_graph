@@ -86,6 +86,7 @@ struct State {
     is_dragging: bool,
     yaw: f32,
     pitch: f32,
+    last_mouse_pos: Option<winit::dpi::PhysicalPosition<f64>>,
 }
 
 impl State {
@@ -253,7 +254,8 @@ impl State {
             camera_radius: 4.0,
             is_dragging: false,
             yaw: f32::to_radians(-90.0),
-            pitch: f32::to_radians(20.0)
+            pitch: f32::to_radians(20.0),
+            last_mouse_pos: None,
         }
     }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -264,11 +266,7 @@ impl State {
         let y = self.camera_radius * self.pitch.sin();
         let z = self.camera_radius * self.pitch.cos() * self.yaw.sin();
 
-        let view = Mat4::look_at_rh(
-            Vec3::new(x, y, z),
-            Vec3::ZERO,
-            Vec3::Y
-        );
+        let view = Mat4::look_at_rh(Vec3::new(x, y, z), Vec3::ZERO, Vec3::Y);
 
         let camera_uniform = CameraUniform {
             view_proj: proj * view,
@@ -351,7 +349,8 @@ impl State {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
-            self.depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.depth_texture_view =
+                depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
             // 창 크기가 바뀌면 투영 행렬도 다시 계산해서 업데이트해야 합니다.
             let aspect = self.config.width as f32 / self.config.height as f32;
             let proj = Mat4::perspective_rh(f32::to_radians(45.0), aspect, 0.1, 100.0);
@@ -393,16 +392,48 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
-            WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
                 state.is_dragging = button_state == winit::event::ElementState::Pressed;
             }
+
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                state.is_dragging = button_state == winit::event::ElementState::Pressed;
+                // 클릭을 떼면 마지막 위치 정보를 초기화하여 다음 클릭 시 튀는 현상을 방지합니다.
+                if !state.is_dragging {
+                    state.last_mouse_pos = None;
+                }
+            }
+
             WindowEvent::CursorMoved { position, .. } => {
-                // 실제로는 이전 좌표와의 차이(Delta)를 써야 하지만,
-                // 간단히 구현하기 위해 좌표의 X값을 회전에 직접 연결해 볼 수 있습니다.
                 if state.is_dragging {
-                    // 마우스 X 좌표의 변화에 따라 rotation 변경 (0.01은 감도 조절용)
-                    state.yaw += 0.005;
-                    state.pitch = (state.pitch + 0.005).clamp(f32::to_radians(-89.0), f32::to_radians(89.0));
+                    if let Some(last_pos) = state.last_mouse_pos {
+                        // 1. 현재 좌표와 이전 좌표의 차이(이동량)를 계산합니다.
+                        let dx = position.x - last_pos.x;
+                        let dy = position.y - last_pos.y;
+
+                        // 2. 고정값(0.005) 대신 이동량(dx, dy)에 감도를 곱해서 더해줍니다.
+                        // dx가 음수면 왼쪽으로, 양수면 오른쪽으로 회전합니다.
+                        let sensitivity = 0.005;
+                        state.yaw += (dx as f32) * sensitivity;
+
+                        // dy가 음수면 위로, 양수면 아래로 회전합니다. (취향에 따라 +/- 반전 가능)
+                        state.pitch += (dy as f32) * sensitivity;
+
+                        // 3. Pitch(위아래)는 90도가 넘으면 화면이 뒤집히므로 제한합니다.
+                        state.pitch = state
+                            .pitch
+                            .clamp(f32::to_radians(-89.0), f32::to_radians(89.0));
+                    }
+                    // 4. 현재 위치를 다음 프레임에서 사용할 '마지막 위치'로 갱신합니다.
+                    state.last_mouse_pos = Some(position);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
