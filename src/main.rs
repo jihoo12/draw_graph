@@ -175,7 +175,10 @@ impl State {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            primitive: wgpu::PrimitiveState::default(),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -419,29 +422,27 @@ impl Mesh {
         render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
     }
 }
-// 3차원 그래프의 정점과 인덱스를 생성하는 함수
 fn generate_3d_graph() -> (Vec<Vertex>, Vec<u16>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
-    let resolution = 50; // 50x50 격자 (총 2500개 정점, u16 인덱스 한계 내에 안전하게 들어옵니다)
-    let size = 10.0;     // 그래프의 가로세로 크기
+    let resolution = 50;
+    let size = 10.0;
     let step = size / (resolution as f32 - 1.0);
     let offset = size / 2.0;
 
-    // 1. 정점(Vertex) 생성
+    // 1. 정점(Vertex) 생성 (기존과 동일하게 회색조 유지)
     for z in 0..resolution {
         for x in 0..resolution {
             let px = (x as f32) * step - offset;
             let pz = (z as f32) * step - offset;
 
-            // 3차원 함수 적용 (예: 물결 무늬)
-            // 중심으로부터의 거리를 구한 뒤 사인 함수를 적용합니다.
             let distance = (px * px + pz * pz).sqrt();
             let py = distance.sin();
 
-            // 높이(py)에 따라 색상을 다르게 지정 (-1.0 ~ 1.0 범위를 0.0 ~ 1.0으로 매핑)
-            let color = [0.0,0.0,0.0];
+            // 흑백(회색조) 색상
+            let brightness = (py + 1.0) / 2.0;
+            let color = [brightness, brightness, brightness];
 
             vertices.push(Vertex {
                 position: [px, py, pz],
@@ -450,23 +451,22 @@ fn generate_3d_graph() -> (Vec<Vertex>, Vec<u16>) {
         }
     }
 
-    // 2. 인덱스(Index) 생성 (사각형 격자를 2개의 삼각형으로 쪼갬)
-    for z in 0..(resolution - 1) {
-        for x in 0..(resolution - 1) {
-            let top_left = z * resolution + x;
-            let top_right = top_left + 1;
-            let bottom_left = (z + 1) * resolution + x;
-            let bottom_right = bottom_left + 1;
+    // 2. 인덱스(Index) 생성: 와이어프레임(선) 연결 방식
+    for z in 0..resolution {
+        for x in 0..resolution {
+            let current = z * resolution + x;
 
-            // 첫 번째 삼각형
-            indices.push(top_left as u16);
-            indices.push(bottom_left as u16);
-            indices.push(top_right as u16);
+            // 가로선 연결 (오른쪽 점과 연결, 끝점이 아닐 때만)
+            if x < resolution - 1 {
+                indices.push(current as u16);
+                indices.push((current + 1) as u16);
+            }
 
-            // 두 번째 삼각형
-            indices.push(top_right as u16);
-            indices.push(bottom_left as u16);
-            indices.push(bottom_right as u16);
+            // 세로선 연결 (아래쪽 점과 연결, 끝점이 아닐 때만)
+            if z < resolution - 1 {
+                indices.push(current as u16);
+                indices.push((current + resolution) as u16);
+            }
         }
     }
 
