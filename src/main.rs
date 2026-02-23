@@ -83,6 +83,9 @@ struct State {
     num_indices: u32,
     depth_texture_view: wgpu::TextureView,
     camera_radius: f32,
+    is_dragging: bool,
+    yaw: f32,
+    pitch: f32,
 }
 
 impl State {
@@ -248,16 +251,24 @@ impl State {
             num_indices,
             depth_texture_view,
             camera_radius: 4.0,
+            is_dragging: false,
+            yaw: f32::to_radians(-90.0),
+            pitch: f32::to_radians(20.0)
         }
     }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         // 1. 카메라 업데이트 로직 (기존과 동일)
-        self.rotation += 0.02;
         let aspect = self.config.width as f32 / self.config.height as f32;
         let proj = Mat4::perspective_rh(f32::to_radians(45.0), aspect, 0.1, 100.0);
-        let cam_x = self.rotation.sin() * self.camera_radius;
-        let cam_z = self.rotation.cos() * self.camera_radius;
-        let view = Mat4::look_at_rh(Vec3::new(cam_x, self.camera_radius * 0.25, cam_z), Vec3::ZERO, Vec3::Y);
+        let x = self.camera_radius * self.pitch.cos() * self.yaw.cos();
+        let y = self.camera_radius * self.pitch.sin();
+        let z = self.camera_radius * self.pitch.cos() * self.yaw.sin();
+
+        let view = Mat4::look_at_rh(
+            Vec3::new(x, y, z),
+            Vec3::ZERO,
+            Vec3::Y
+        );
 
         let camera_uniform = CameraUniform {
             view_proj: proj * view,
@@ -382,6 +393,18 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
+            WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
+                state.is_dragging = button_state == winit::event::ElementState::Pressed;
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                // 실제로는 이전 좌표와의 차이(Delta)를 써야 하지만,
+                // 간단히 구현하기 위해 좌표의 X값을 회전에 직접 연결해 볼 수 있습니다.
+                if state.is_dragging {
+                    // 마우스 X 좌표의 변화에 따라 rotation 변경 (0.01은 감도 조절용)
+                    state.yaw += 0.005;
+                    state.pitch = (state.pitch + 0.005).clamp(f32::to_radians(-89.0), f32::to_radians(89.0));
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
