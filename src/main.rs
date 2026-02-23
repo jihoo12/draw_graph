@@ -82,6 +82,7 @@ struct State {
     index_buffer: wgpu::Buffer,
     num_indices: u32,
     depth_texture_view: wgpu::TextureView,
+    camera_radius: f32,
 }
 
 impl State {
@@ -246,6 +247,7 @@ impl State {
             index_buffer,
             num_indices,
             depth_texture_view,
+            camera_radius: 4.0,
         }
     }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -253,9 +255,9 @@ impl State {
         self.rotation += 0.02;
         let aspect = self.config.width as f32 / self.config.height as f32;
         let proj = Mat4::perspective_rh(f32::to_radians(45.0), aspect, 0.1, 100.0);
-        let cam_x = self.rotation.sin() * 4.0;
-        let cam_z = self.rotation.cos() * 4.0;
-        let view = Mat4::look_at_rh(Vec3::new(cam_x, 1.0, cam_z), Vec3::ZERO, Vec3::Y);
+        let cam_x = self.rotation.sin() * self.camera_radius;
+        let cam_z = self.rotation.cos() * self.camera_radius;
+        let view = Mat4::look_at_rh(Vec3::new(cam_x, self.camera_radius * 0.25, cam_z), Vec3::ZERO, Vec3::Y);
 
         let camera_uniform = CameraUniform {
             view_proj: proj * view,
@@ -380,6 +382,15 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scroll_amount = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
+                };
+                // 휠을 밀면 가까워지고(-), 당기면 멀어지게(+) 설정
+                // 최소 거리 1.0, 최대 거리 20.0으로 제한(clamp)
+                state.camera_radius = (state.camera_radius - scroll_amount).clamp(1.0, 20.0);
+            }
             WindowEvent::RedrawRequested => {
                 // 화면을 그리고
                 match state.render() {
