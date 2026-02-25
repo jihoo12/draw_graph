@@ -9,18 +9,6 @@ use winit::{
 };
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-struct Mesh {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
-}
-
-#[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
     view_proj: Mat4,
@@ -36,21 +24,20 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     window: Arc<Window>,
-    rotation: f32,
     depth_texture_view: wgpu::TextureView,
     camera_radius: f32,
     is_dragging: bool,
     yaw: f32,
     pitch: f32,
     last_mouse_pos: Option<winit::dpi::PhysicalPosition<f64>>,
-    obj_mesh: Mesh,
+    // 정점 버퍼(Mesh)가 더 이상 필요하지 않습니다.
 }
 
 impl State {
     async fn new(window: Arc<Window>) -> State {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::all(),
             ..Default::default()
         });
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -79,32 +66,12 @@ impl State {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-        let (graph_vertices, graph_indices) = generate_3d_graph();
-        let obj_mesh = Mesh::new(&device, &graph_vertices, &graph_indices);
-        let size = window.inner_size();
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Depth Texture"),
-            size: wgpu::Extent3d {
-                width: size.width,
-                height: size.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float, // 깊이 값을 저장할 포맷
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
 
-        let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_texture_view = Self::create_depth_texture(&device, &config);
 
         // --- 카메라 설정 ---
-        let aspect = config.width as f32 / config.height as f32;
-        let proj = Mat4::perspective_rh(f32::to_radians(45.0), aspect, 0.1, 100.0);
-        let view = Mat4::look_at_rh(Vec3::new(0.0, 1.0, 2.0), Vec3::ZERO, Vec3::Y);
         let camera_uniform = CameraUniform {
-            view_proj: proj * view,
+            view_proj: Mat4::IDENTITY,
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -113,7 +80,6 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // 셰이더와 버퍼를 연결하는 레이아웃
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("camera_bind_group_layout"),
@@ -151,11 +117,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                }],
+                buffers: &[], // 버퍼를 사용하지 않음!
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -171,12 +133,12 @@ impl State {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // 더 가까운 것만 그리기
+                depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
+                topology: wgpu::PrimitiveTopology::LineList, // 선으로 그리기
                 ..Default::default()
             },
             multisample: wgpu::MultisampleState::default(),
@@ -194,43 +156,61 @@ impl State {
             render_pipeline,
             camera_buffer,
             camera_bind_group,
-            rotation: 0.0,
             depth_texture_view,
-            camera_radius: 4.0,
+            camera_radius: 15.0,
             is_dragging: false,
             yaw: f32::to_radians(-90.0),
-            pitch: f32::to_radians(20.0),
+            pitch: f32::to_radians(30.0),
             last_mouse_pos: None,
-            obj_mesh,
         }
     }
+
+    fn create_depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if new_size.width > 0 && new_size.height > 0 {
+            self.size = new_size;
+            self.config.width = new_size.width;
+            self.config.height = new_size.height;
+            self.surface.configure(&self.device, &self.config);
+            self.depth_texture_view = Self::create_depth_texture(&self.device, &self.config);
+        }
+    }
+
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        // 1. 카메라 업데이트 로직 (기존과 동일)
+        // 카메라 업데이트
         let aspect = self.config.width as f32 / self.config.height as f32;
         let proj = Mat4::perspective_rh(f32::to_radians(45.0), aspect, 0.1, 100.0);
         let x = self.camera_radius * self.pitch.cos() * self.yaw.cos();
         let y = self.camera_radius * self.pitch.sin();
         let z = self.camera_radius * self.pitch.cos() * self.yaw.sin();
-
         let view = Mat4::look_at_rh(Vec3::new(x, y, z), Vec3::ZERO, Vec3::Y);
-
-        let camera_uniform = CameraUniform {
-            view_proj: proj * view,
-        };
 
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            bytemuck::cast_slice(&[camera_uniform]),
+            bytemuck::cast_slice(&[CameraUniform { view_proj: proj * view }]),
         );
 
         let output = self.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -240,94 +220,59 @@ impl State {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.01, g: 0.01, b: 0.02, a: 1.0 }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                // ★ 깊이 스텐실 첨부 추가 ★
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture_view, // 미리 생성해둔 뷰
+                    view: &self.depth_texture_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0), // 가장 먼 거리로 초기화
+                        load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
-                multiview_mask: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
+                ..Default::default()
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            self.obj_mesh.draw(&mut render_pass);
+
+            // ★ 중요: 해상도(50x50)에 따른 정점 개수를 계산하여 GPU에 명령을 내립니다.
+            // 가로선: 50줄 * (49개 선분 * 2개 정점) = 4,900
+            // 세로선: 50줄 * (49개 선분 * 2개 정점) = 4,900
+            // 총 9,800개의 정점을 그리도록 요청합니다.
+            let resolution = 50;
+            let vertices_per_direction = resolution * (resolution - 1) * 2;
+            render_pass.draw(0..(vertices_per_direction * 2), 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         Ok(())
     }
-    // 2. 렌더링 로직
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Depth Texture"),
-                size: wgpu::Extent3d {
-                    width: new_size.width,
-                    height: new_size.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            self.depth_texture_view =
-                depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            // 창 크기가 바뀌면 투영 행렬도 다시 계산해서 업데이트해야 합니다.
-            let aspect = self.config.width as f32 / self.config.height as f32;
-            let proj = Mat4::perspective_rh(f32::to_radians(45.0), aspect, 0.1, 100.0);
-            let view = Mat4::look_at_rh(Vec3::new(0.0, 1.0, 2.0), Vec3::ZERO, Vec3::Y);
-            let camera_uniform = CameraUniform {
-                view_proj: proj * view,
-            };
-            self.queue.write_buffer(
-                &self.camera_buffer,
-                0,
-                bytemuck::cast_slice(&[camera_uniform]),
-            );
-        }
-    }
 }
 
-// App 구조체와 main 함수는 이전과 거의 동일하므로 생략하거나 기존 코드를 사용하세요.
 struct App {
     state: Option<State>,
 }
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_none() {
-            let window = Arc::new(
-                event_loop
-                    .create_window(Window::default_attributes())
-                    .unwrap(),
-            );
+            let window = Arc::new(event_loop.create_window(Window::default_attributes()).unwrap());
             self.state = Some(pollster::block_on(State::new(window)));
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let WindowEvent::CloseRequested = event {
+            println!("Closing application...");
+            // ★ 중요: state를 명시적으로 None으로 설정하여 Drop 시킵니다.
+            self.state = None;
+            event_loop.exit();
+            return;
+        }
         let state = match self.state.as_mut() {
             Some(s) => s,
             None => return,
@@ -336,144 +281,38 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
-            WindowEvent::MouseInput {
-                state: button_state,
-                button: winit::event::MouseButton::Left,
-                ..
-            } => {
-                state.is_dragging = button_state == winit::event::ElementState::Pressed;
-                if !state.is_dragging {
-                    state.last_mouse_pos = None;
-                }
+            WindowEvent::MouseInput { state: btn_state, button: winit::event::MouseButton::Left, .. } => {
+                state.is_dragging = btn_state == winit::event::ElementState::Pressed;
+                if !state.is_dragging { state.last_mouse_pos = None; }
             }
-
             WindowEvent::CursorMoved { position, .. } => {
                 if state.is_dragging {
                     if let Some(last_pos) = state.last_mouse_pos {
-                        // 1. 현재 좌표와 이전 좌표의 차이(이동량)를 계산합니다.
                         let dx = position.x - last_pos.x;
                         let dy = position.y - last_pos.y;
-
-                        // 2. 고정값(0.005) 대신 이동량(dx, dy)에 감도를 곱해서 더해줍니다.
-                        // dx가 음수면 왼쪽으로, 양수면 오른쪽으로 회전합니다.
-                        let sensitivity = 0.005;
-                        state.yaw += (dx as f32) * sensitivity;
-
-                        // dy가 음수면 위로, 양수면 아래로 회전합니다. (취향에 따라 +/- 반전 가능)
-                        state.pitch += (dy as f32) * sensitivity;
-
-                        // 3. Pitch(위아래)는 90도가 넘으면 화면이 뒤집히므로 제한합니다.
-                        state.pitch = state
-                            .pitch
-                            .clamp(f32::to_radians(-89.0), f32::to_radians(89.0));
+                        state.yaw += (dx as f32) * 0.005;
+                        state.pitch = (state.pitch + (dy as f32) * 0.005).clamp(f32::to_radians(-89.0), f32::to_radians(89.0));
                     }
-                    // 4. 현재 위치를 다음 프레임에서 사용할 '마지막 위치'로 갱신합니다.
                     state.last_mouse_pos = Some(position);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let scroll_amount = match delta {
+                let scroll = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.1,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.01,
                 };
-                // 휠을 밀면 가까워지고(-), 당기면 멀어지게(+) 설정
-                // 최소 거리 1.0, 최대 거리 20.0으로 제한(clamp)
-                state.camera_radius = (state.camera_radius - scroll_amount).clamp(1.0, 20.0);
+                state.camera_radius = (state.camera_radius - scroll).clamp(2.0, 50.0);
             }
             WindowEvent::RedrawRequested => {
-                // 화면을 그리고
-                match state.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-                    Err(e) => eprintln!("{:?}", e),
+                if let Err(wgpu::SurfaceError::Lost) = state.render() {
+                    state.resize(state.size);
                 }
-                // ★ 중요: 그리기가 끝나자마자 다음 프레임을 즉시 요청합니다.
                 state.window.request_redraw();
             }
             _ => (),
         }
     }
-
-    // 이 부분은 비워두거나 제거해도 RedrawRequested 내의 호출이 우선됩니다.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {}
 }
-impl Mesh {
-    fn new(device: &wgpu::Device, vertices: &[Vertex], indices: &[u16]) -> Self {
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mesh Vertex Buffer"),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mesh Index Buffer"),
-            contents: bytemuck::cast_slice(indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        Self {
-            vertex_buffer,
-            index_buffer,
-            num_indices: indices.len() as u32,
-        }
-    }
-
-    fn draw<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-    }
-}
-
-fn generate_3d_graph() -> (Vec<Vertex>, Vec<u16>) {
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-
-    let resolution = 50;
-    let size = 10.0;
-    let step = size / (resolution as f32 - 1.0);
-    let offset = size / 2.0;
-
-    // 1. 정점(Vertex) 생성 (기존과 동일하게 회색조 유지)
-    for z in 0..resolution {
-        for x in 0..resolution {
-            let px = (x as f32) * step - offset;
-            let pz = (z as f32) * step - offset;
-
-            let distance = (px * px + pz * pz).sqrt();
-            let py = distance.sin();
-
-            // 흑백(회색조) 색상
-            let brightness = (py + 1.0) / 2.0;
-            let color = [brightness, brightness, brightness];
-
-            vertices.push(Vertex {
-                position: [px, py, pz],
-                color,
-            });
-        }
-    }
-
-    // 2. 인덱스(Index) 생성: 와이어프레임(선) 연결 방식
-    for z in 0..resolution {
-        for x in 0..resolution {
-            let current = z * resolution + x;
-
-            // 가로선 연결 (오른쪽 점과 연결, 끝점이 아닐 때만)
-            if x < resolution - 1 {
-                indices.push(current as u16);
-                indices.push((current + 1) as u16);
-            }
-
-            // 세로선 연결 (아래쪽 점과 연결, 끝점이 아닐 때만)
-            if z < resolution - 1 {
-                indices.push(current as u16);
-                indices.push((current + resolution) as u16);
-            }
-        }
-    }
-
-    (vertices, indices)
-}
-
 
 fn main() {
     let event_loop = EventLoop::new().unwrap();
